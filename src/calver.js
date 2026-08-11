@@ -39,27 +39,31 @@ function releaseYearMonth({ dateInput = '', timezone = 'UTC', now = new Date() }
   return { year, month };
 }
 
-function nextPatch(tags, { year, month, prefix = '' }) {
-  const pattern = new RegExp(
-    `^${escapeRegex(prefix)}${year}\\.${month}\\.(\\d+)$`,
+function nextPatch(tags, { year, month, prefix = '', legacyPrefixes = [] }) {
+  const prefixes = [...new Set([prefix, ...legacyPrefixes])];
+  const patterns = prefixes.map(
+    (candidate) => new RegExp(`^${escapeRegex(candidate)}${year}\\.${month}\\.(\\d+)$`),
   );
   let maxPatch = -1;
   for (const tag of tags) {
-    const match = pattern.exec(tag.trim());
-    if (!match) continue;
-    const patch = Number(match[1]);
-    if (!Number.isSafeInteger(patch)) {
-      throw new Error(`patch in tag ${JSON.stringify(tag)} exceeds JavaScript safe integer range`);
+    for (const pattern of patterns) {
+      const match = pattern.exec(tag.trim());
+      if (!match) continue;
+      const patch = Number(match[1]);
+      if (!Number.isSafeInteger(patch)) {
+        throw new Error(`patch in tag ${JSON.stringify(tag)} exceeds JavaScript safe integer range`);
+      }
+      maxPatch = Math.max(maxPatch, patch);
+      break;
     }
-    maxPatch = Math.max(maxPatch, patch);
   }
   return maxPatch + 1;
 }
 
 function allocate(tags, options = {}) {
-  const { prefix = '' } = options;
+  const { prefix = '', legacyPrefixes = [] } = options;
   const { year, month } = releaseYearMonth(options);
-  const patch = nextPatch(tags, { year, month, prefix });
+  const patch = nextPatch(tags, { year, month, prefix, legacyPrefixes });
   const version = `${year}.${month}.${patch}`;
   return {
     version,

@@ -28,6 +28,17 @@ test('supports an optional tag prefix without requiring one', () => {
   );
 });
 
+test('can migrate away from a legacy tag prefix', () => {
+  assert.deepEqual(
+    allocate(['v2026.8.0', 'v2026.8.3'], {
+      dateInput: '2026-08-11',
+      prefix: '',
+      legacyPrefixes: ['v'],
+    }),
+    { version: '2026.8.4', tag: '2026.8.4', year: 2026, month: 8, patch: 4 },
+  );
+});
+
 test('uses the requested timezone for the workflow runtime date', () => {
   const now = new Date('2026-07-31T15:30:00Z');
   assert.deepEqual(releaseYearMonth({ timezone: 'Asia/Tokyo', now }), {

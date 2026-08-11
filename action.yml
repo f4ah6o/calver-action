@@ -9,7 +9,11 @@ inputs:
     required: false
     default: UTC
   prefix:
-    description: Optional prefix for immutable release tags. Empty means tags like 2026.8.0.
+    description: Optional prefix for newly allocated immutable release tags. Empty means tags like 2026.8.0.
+    required: false
+    default: ''
+  legacy_prefixes:
+    description: Comma-separated legacy prefixes to consider when finding the highest existing PATCH, without using them for new tags.
     required: false
     default: ''
   date:

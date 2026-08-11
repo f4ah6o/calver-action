@@ -70,6 +70,7 @@ When `create_tag` is enabled, the checkout credentials must be able to push tags
 | --- | --- | --- |
 | `timezone` | `UTC` | IANA timezone used to resolve the release year/month |
 | `prefix` | empty | Optional immutable tag prefix, for example `v` |
+| `legacy_prefixes` | empty | Comma-separated old prefixes considered for PATCH allocation only |
 | `date` | empty | Optional `YYYY-MM-DD` override for deterministic runs/tests |
 | `fetch_tags` | `true` | Force-refresh tags from `origin` before allocation |
 | `create_tag` | `false` | Create and push the allocated immutable tag |
@@ -96,6 +97,15 @@ When `create_tag` is enabled, the checkout credentials must be able to push tags
 ```
 
 This returns `version=2026.8.0` and `tag=v2026.8.0`.
+
+To migrate from old `vYYYY.M.PATCH` tags to prefixless tags without resetting PATCH, keep `prefix` empty and set:
+
+```yaml
+with:
+  legacy_prefixes: v
+```
+
+For example, if `v2026.8.3` exists, the next new tag is `2026.8.4`.
 
 ## Deterministic test/replay
 

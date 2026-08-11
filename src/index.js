@@ -94,12 +94,16 @@ function createTagWithRetry(options, target, retries, shouldFetch) {
 function main() {
   const timezone = input('timezone', 'UTC');
   const prefix = input('prefix', '');
+  const legacyPrefixes = input('legacy_prefixes', '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   const dateInput = input('date', '');
   const shouldFetch = boolInput('fetch_tags', true);
   const shouldCreateTag = boolInput('create_tag', false);
   const retries = intInput('retries', 5);
   const target = input('target', process.env.GITHUB_SHA || 'HEAD');
-  const options = { timezone, prefix, dateInput };
+  const options = { timezone, prefix, legacyPrefixes, dateInput };
 
   let result;
   if (shouldCreateTag) {
