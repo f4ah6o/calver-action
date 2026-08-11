@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: ''
+      registry_publish:
+        description: Publish the package to its public registry. When false, version/provenance/tag release steps still run.
+        required: false
+        type: boolean
+        default: true
     outputs:
       version:
         description: Published npm package version.
@@ -111,6 +116,7 @@ jobs:
           package-manager-cache: false
 
       - name: Ensure npm supports trusted publishing
+        if: inputs.registry_publish
         run: npm install --global npm@11
 
       - name: Allocate CalVer
@@ -186,6 +192,7 @@ jobs:
           git commit -m "chore: release ${PACKAGE_NAME} ${VERSION}"
 
       - name: Publish package if needed
+        if: inputs.registry_publish
         shell: bash
         working-directory: ${{ inputs.working_directory }}
         env:
@@ -221,6 +228,7 @@ jobs:
           PACKAGE_NAME: ${{ steps.package.outputs.name }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
           SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+          REGISTRY_PUBLISH: ${{ inputs.registry_publish }}
         run: |
           {
             echo "## npm release"
@@ -229,4 +237,5 @@ jobs:
             echo "- version: `${VERSION}`"
             echo "- tag: `${TAG}`"
             echo "- source: `${SOURCE_SHA}` (`${SHORT_SHA}`)"
+            echo "- npm publish: `${REGISTRY_PUBLISH}`"
           } >> "$GITHUB_STEP_SUMMARY"

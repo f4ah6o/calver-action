@@ -88,6 +88,28 @@ The npm workflow follows the same release-only-commit model. It updates `package
 
 For npm Trusted Publishing, configure the npm package's trusted publisher for the **calling workflow filename** in the package repository. npm's reusable-workflow validation uses the caller workflow identity. The caller must grant `id-token: write` as shown above.
 
+### Registry publishing policy
+
+Repository visibility and registry publishing are separate concerns. Both reusable workflows accept:
+
+```yaml
+with:
+  registry_publish: false
+```
+
+When `registry_publish: false`, the workflow still allocates CalVer, embeds provenance, updates package metadata, validates/packages the project, creates the release-only commit, and pushes the immutable CalVer tag. It skips only crates.io/npm authentication and registry publication.
+
+| Repository | `registry_publish` | Result |
+| --- | --- | --- |
+| private | `true` | Publish to the configured public registry, subject to registry/auth rules |
+| private | `false` | Internal CalVer + provenance + immutable Git tag only |
+| public | `true` | Normal registry release |
+| public | `false` | Public source repo, but no registry publication; Git version/tag release only |
+
+This makes `registry_publish: false` useful for company-internal tools that want consistent versions and source provenance without distributing artifacts through crates.io or npm. For Rust, `publish = false` in `Cargo.toml` is also a useful defense-in-depth setting for projects that must never be uploaded to a registry.
+
+A private GitHub repository can call these reusable workflows because `calver-action` itself is public. For npm Trusted Publishing, publishing from a private GitHub repository is supported, but npm provenance attestations are not generated for private repositories.
+
 ### Embedded source provenance
 
 Package versions stay pure CalVer:

@@ -38,6 +38,11 @@ on:
         required: false
         type: string
         default: ''
+      registry_publish:
+        description: Publish the package to its public registry. When false, version/provenance/tag release steps still run.
+        required: false
+        type: boolean
+        default: true
     outputs:
       version:
         description: Published crate version.
@@ -198,9 +203,11 @@ jobs:
           git commit -m "chore: release ${CRATE_NAME} ${VERSION}"
 
       - uses: rust-lang/crates-io-auth-action@v1
+        if: inputs.registry_publish
         id: auth
 
       - name: Publish crate if needed
+        if: inputs.registry_publish
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
@@ -234,6 +241,7 @@ jobs:
           CRATE_NAME: ${{ steps.crate.outputs.name }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
           SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+          REGISTRY_PUBLISH: ${{ inputs.registry_publish }}
         run: |
           {
             echo "## Rust crate release"
@@ -242,4 +250,5 @@ jobs:
             echo "- version: `${VERSION}`"
             echo "- tag: `${TAG}`"
             echo "- source: `${SOURCE_SHA}` (`${SHORT_SHA}`)"
+            echo "- crates.io publish: `${REGISTRY_PUBLISH}`"
           } >> "$GITHUB_STEP_SUMMARY"
