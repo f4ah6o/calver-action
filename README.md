@@ -1,5 +1,7 @@
 # calver-action
 
+[English](README.md) | [日本語](README.ja.md)
+
 > **Unofficial project.** This GitHub Action is not affiliated with, endorsed by, or maintained by the CalVer project, calver.org, its maintainers, GitHub, crates.io, or npm.
 
 A small format-driven GitHub Action that allocates Calendar Versioning release identifiers from the workflow runtime date and existing immutable Git tags.
@@ -280,6 +282,25 @@ For example, with `format: YYYY.MM.PATCH`, if `v2026.8.3` exists, the next prefi
 | `patch` | `0`, or empty when the format has no `PATCH` |
 
 Reusable Rust/npm workflows additionally expose `source_sha` and `short_sha`.
+
+## Releasing calver-action itself
+
+This repository dogfoods the core action. Moving the `latest` tag to a commit in `main` history triggers `.github/workflows/release.yaml`, which validates the action, allocates the next `YYYY.MM.PATCH` version in `Asia/Tokyo`, creates the immutable CalVer tag, and opens a draft GitHub Release.
+
+```bash
+git tag -f latest <commit-to-release>
+git push -f origin latest
+```
+
+The draft is intentional: GitHub Marketplace publication currently requires the release UI to select **Publish this Action to the GitHub Marketplace**. The workflow therefore automates the version/tag/release draft while leaving Marketplace publication as the final human step.
+
+## GitHub Marketplace
+
+The repository is structured for GitHub Marketplace publication: it is public, has one root `action.yml`, includes marketplace metadata and branding, has a dedicated license and notices, and keeps the action implementation in its own repository.
+
+For the first Marketplace release, open the generated draft release, select **Publish this Action to the GitHub Marketplace**, choose categories, accept the Marketplace Developer Agreement if GitHub asks for it, and publish the release.
+
+The project remains explicitly **unofficial** in its README, metadata, and third-party notices.
 
 ## Development
 

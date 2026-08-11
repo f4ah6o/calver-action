@@ -1,0 +1,75 @@
+name: Release calver-action
+
+on:
+  push:
+    tags:
+      - latest
+
+concurrency:
+  group: calver-action-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify release source belongs to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release source ${GITHUB_SHA} is not in origin/main history."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Validate action
+        run: npm run check
+
+      - name: Allocate CalVer
+        id: calver
+        uses: ./
+        with:
+          format: YYYY.MM.PATCH
+          timezone: Asia/Tokyo
+          create_tag: false
+
+      - name: Create CalVer tag and draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --generate-notes \
+            --title "$TAG"
+
+      - name: Summary
+        shell: bash
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          {
+            echo "## calver-action release draft"
+            echo
+            echo "- version: `${VERSION}`"
+            echo "- tag: `${TAG}`"
+            echo "- source: `${GITHUB_SHA}`"
+            echo "- Marketplace: open the draft release, enable Marketplace publication, choose categories, then publish"
+          } >> "$GITHUB_STEP_SUMMARY"
