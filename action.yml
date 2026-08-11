@@ -1,11 +1,15 @@
 name: Unofficial CalVer
 
-description: Compute and optionally create the next YYYY.M.PATCH release tag from existing Git tags.
+description: Compute and optionally create a configurable CalVer release tag from the workflow runtime date and existing Git tags.
 author: f4ah6o
 
 inputs:
+  format:
+    description: CalVer format using YYYY, YY, 0Y, MM, 0M, WW, 0W, DD, 0D and optional PATCH.
+    required: false
+    default: YYYY.MM.PATCH
   timezone:
-    description: IANA timezone used to determine the release year and month.
+    description: IANA timezone used to determine the workflow runtime calendar date.
     required: false
     default: UTC
   prefix:
@@ -13,7 +17,7 @@ inputs:
     required: false
     default: ''
   legacy_prefixes:
-    description: Comma-separated legacy prefixes to consider when finding the highest existing PATCH, without using them for new tags.
+    description: Comma-separated legacy prefixes to consider during allocation without using them for new tags.
     required: false
     default: ''
   date:
@@ -39,15 +43,19 @@ inputs:
 
 outputs:
   version:
-    description: Allocated CalVer without a tag prefix, for example 2026.8.0.
+    description: Allocated CalVer without a tag prefix.
   tag:
     description: Allocated immutable Git tag, including prefix when configured.
   year:
-    description: Four-digit release year.
+    description: Four-digit Gregorian release year.
   month:
     description: Numeric release month without zero padding.
+  week:
+    description: Numeric week since the start of the release year without zero padding.
+  day:
+    description: Numeric day of month without zero padding.
   patch:
-    description: Numeric patch sequence within the release month.
+    description: Numeric PATCH sequence for formats containing PATCH; empty otherwise.
 
 runs:
   using: node24

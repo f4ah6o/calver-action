@@ -41,11 +41,12 @@ function localTags() {
 
 function writeOutput(name, value) {
   const outputPath = process.env.GITHUB_OUTPUT;
+  const rendered = value == null ? '' : String(value);
   if (!outputPath) {
-    process.stdout.write(`${name}=${value}\n`);
+    process.stdout.write(`${name}=${rendered}\n`);
     return;
   }
-  fs.appendFileSync(outputPath, `${name}=${value}\n`, 'utf8');
+  fs.appendFileSync(outputPath, `${name}=${rendered}\n`, 'utf8');
 }
 
 function publishOutputs(result) {
@@ -53,6 +54,8 @@ function publishOutputs(result) {
   writeOutput('tag', result.tag);
   writeOutput('year', result.year);
   writeOutput('month', result.month);
+  writeOutput('week', result.week);
+  writeOutput('day', result.day);
   writeOutput('patch', result.patch);
 }
 
@@ -92,6 +95,7 @@ function createTagWithRetry(options, target, retries, shouldFetch) {
 }
 
 function main() {
+  const format = input('format', 'YYYY.MM.PATCH');
   const timezone = input('timezone', 'UTC');
   const prefix = input('prefix', '');
   const legacyPrefixes = input('legacy_prefixes', '')
@@ -103,7 +107,7 @@ function main() {
   const shouldCreateTag = boolInput('create_tag', false);
   const retries = intInput('retries', 5);
   const target = input('target', process.env.GITHUB_SHA || 'HEAD');
-  const options = { timezone, prefix, legacyPrefixes, dateInput };
+  const options = { format, timezone, prefix, legacyPrefixes, dateInput };
 
   let result;
   if (shouldCreateTag) {

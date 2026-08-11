@@ -2,80 +2,153 @@
 
 > **Unofficial project.** This GitHub Action is not affiliated with, endorsed by, or maintained by the CalVer project, calver.org, its maintainers, or GitHub, Inc.
 
-A small GitHub Action that allocates the next `YYYY.M.PATCH` release version from the workflow runtime date and existing immutable Git tags.
+A small format-driven GitHub Action that allocates Calendar Versioning release identifiers from the workflow runtime date and existing immutable Git tags.
 
-It is designed for release flows where a movable trigger tag such as `latest` starts a workflow, while the actual release receives an immutable CalVer tag such as `2026.8.0`.
+CalVer itself is a calendar-based software versioning convention with multiple valid schemes rather than one mandatory format. See https://calver.org/overview.html and https://calver.org/about.html.
 
-CalVer itself is a calendar-based software versioning convention. See the original project and documentation at https://calver.org/about.html and https://github.com/mahmoud/calver.
+## Quick start
 
-## Behavior
+```yaml
+- uses: f4ah6o/calver-action@<commit-sha>
+  id: calver
+  with:
+    format: YYYY.MM.PATCH
+    timezone: Asia/Tokyo
 
-For a workflow running in August 2026:
+- run: echo "release ${{ steps.calver.outputs.version }}"
+```
+
+For a run on August 11, 2026, the default format allocates `2026.8.0` when no matching tag exists, then `2026.8.1`, `2026.8.2`, and so on.
+
+## Formats
+
+Supported CalVer calendar tokens follow the terminology documented by calver.org:
+
+| Token | Meaning | Example on 2026-08-11 |
+| --- | --- | --- |
+| `YYYY` | full year | `2026` |
+| `YY` | short year relative to 2000 | `26` |
+| `0Y` | zero-padded short year relative to 2000 | `26` |
+| `MM` | month | `8` |
+| `0M` | zero-padded month | `08` |
+| `WW` | week since start of year | `32` |
+| `0W` | zero-padded week since start of year | `32` |
+| `DD` | day of month | `11` |
+| `0D` | zero-padded day of month | `11` |
+| `PATCH` | **action extension:** zero-based collision counter for the rendered calendar bucket | `0` |
+
+Examples:
+
+```text
+YYYY.MM.PATCH   -> 2026.8.0
+YY.0M.PATCH    -> 26.08.0
+YYYY.0M.0D     -> 2026.08.11
+YYYY-0M-0D     -> 2026-08-11
+YYYY.WW.PATCH  -> 2026.32.0
+```
+
+`PATCH` is not a CalVer calendar token from calver.org; this action adds it as an automatic monotonically increasing counter within the selected rendered calendar bucket. If a format omits `PATCH`, a second release that would produce an existing tag fails with a collision error instead of silently changing the format.
+
+Week formats cannot be combined with month/day tokens. Week numbers are 1-based seven-day buckets counted from January 1, matching the CalVer notion of weeks since the start of the year.
+
+Uppercase identifiers that are not supported tokens are rejected so format typos fail early. Separators and lowercase literal text are preserved.
+
+## PATCH allocation
+
+For `format: YYYY.MM.PATCH` during August 2026:
 
 - no `2026.8.*` tags -> `2026.8.0`
 - `2026.8.0` exists -> `2026.8.1`
 - `2026.8.0` and `2026.8.4` exist -> `2026.8.5`
-- July tags do not affect the August patch sequence
+- July tags do not affect the August sequence
 
-The default tag has no `v` prefix. A prefix can be configured when a repository needs one.
+For `format: YYYY.WW.PATCH`, the counter is scoped to the rendered year/week instead.
 
-By default the action only allocates a version and returns outputs. With `create_tag: true`, it also creates and pushes the immutable tag. Concurrent releases that race for the same patch are retried after refreshing remote tags.
+## Release trigger patterns
 
-## Recommended release pattern
+The action only allocates or creates a CalVer tag; it does **not** require a particular release trigger.
 
-Move a trigger tag to the commit you want to release:
+A movable tag such as `latest` is one useful pattern:
 
 ```bash
-git tag -f latest HEAD
+git tag -f latest <commit-to-release>
 git push -f origin latest
 ```
 
-Then trigger a release workflow from `latest`:
-
 ```yaml
-name: Release
-
 on:
   push:
     tags:
       - latest
-
-permissions:
-  contents: write
-
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: f4ah6o/calver-action@main
-        id: calver
-        with:
-          timezone: Asia/Tokyo
-          create_tag: true
-
-      - run: echo "release ${{ steps.calver.outputs.version }}"
 ```
 
-The workflow runtime date is used as the release date. For example, a run on August 11, 2026 in `Asia/Tokyo` allocates from the `2026.8.*` sequence regardless of the authored or committed timestamp of the target commit.
+The release commit does not need to be the current branch HEAD. Normal development may continue ahead of the commit selected for release. Whether the selected commit must belong to a particular branch is a policy for the consuming workflow, not this action.
 
-When `create_tag` is enabled, the checkout credentials must be able to push tags. A typical GitHub-hosted workflow uses `permissions: contents: write` as above.
+Other triggers such as `workflow_dispatch`, GitHub Releases, or branch workflows can call the same action without changes to its version-allocation behavior.
+
+## Runtime date
+
+The workflow runtime date is used by default, not the authored or committed timestamp of the target commit.
+
+```yaml
+with:
+  timezone: Asia/Tokyo
+```
+
+A run after midnight in Japan therefore uses the new Japanese calendar date even when it is still the previous UTC date.
+
+For deterministic tests or replay:
+
+```yaml
+with:
+  date: 2026-08-11
+  fetch_tags: false
+```
+
+## Creating tags
+
+By default the action only allocates a version and returns outputs.
+
+```yaml
+with:
+  create_tag: true
+```
+
+With `create_tag: true`, the action creates and pushes the immutable tag to `target` (`GITHUB_SHA`, then `HEAD`, by default). The checkout credentials need tag-push permission, typically `permissions: contents: write`.
+
+Concurrent releases that race for the same `PATCH` refresh remote tags and retry allocation.
+
+## Prefix migration
+
+New tags are prefixless by default. To create `v2026.8.0`:
+
+```yaml
+with:
+  prefix: v
+```
+
+To migrate from old `v...` tags to prefixless tags without resetting a `PATCH` sequence:
+
+```yaml
+with:
+  legacy_prefixes: v
+```
+
+For example, with `format: YYYY.MM.PATCH`, if `v2026.8.3` exists, the next prefixless tag is `2026.8.4`.
 
 ## Inputs
 
 | Input | Default | Description |
 | --- | --- | --- |
-| `timezone` | `UTC` | IANA timezone used to resolve the release year/month |
-| `prefix` | empty | Optional immutable tag prefix, for example `v` |
-| `legacy_prefixes` | empty | Comma-separated old prefixes considered for PATCH allocation only |
-| `date` | empty | Optional `YYYY-MM-DD` override for deterministic runs/tests |
-| `fetch_tags` | `true` | Force-refresh tags from `origin` before allocation |
+| `format` | `YYYY.MM.PATCH` | CalVer format |
+| `timezone` | `UTC` | IANA timezone used to resolve the runtime calendar date |
+| `prefix` | empty | Prefix for newly allocated immutable tags |
+| `legacy_prefixes` | empty | Comma-separated old prefixes considered during allocation |
+| `date` | empty | Optional `YYYY-MM-DD` runtime-date override |
+| `fetch_tags` | `true` | Refresh tags from `origin` before allocation |
 | `create_tag` | `false` | Create and push the allocated immutable tag |
 | `target` | `GITHUB_SHA` / `HEAD` | Git object to tag |
-| `retries` | `5` | Allocation attempts when concurrent releases collide |
+| `retries` | `5` | Tag-allocation attempts for concurrent PATCH races |
 
 ## Outputs
 
@@ -85,37 +158,9 @@ When `create_tag` is enabled, the checkout credentials must be able to push tags
 | `tag` | `2026.8.0` |
 | `year` | `2026` |
 | `month` | `8` |
-| `patch` | `0` |
-
-## Prefix example
-
-```yaml
-- uses: f4ah6o/calver-action@main
-  id: calver
-  with:
-    prefix: v
-```
-
-This returns `version=2026.8.0` and `tag=v2026.8.0`.
-
-To migrate from old `vYYYY.M.PATCH` tags to prefixless tags without resetting PATCH, keep `prefix` empty and set:
-
-```yaml
-with:
-  legacy_prefixes: v
-```
-
-For example, if `v2026.8.3` exists, the next new tag is `2026.8.4`.
-
-## Deterministic test/replay
-
-```yaml
-- uses: f4ah6o/calver-action@main
-  id: calver
-  with:
-    date: 2026-08-11
-    fetch_tags: false
-```
+| `week` | `32` |
+| `day` | `11` |
+| `patch` | `0`, or empty when the format has no `PATCH` |
 
 ## Development
 
@@ -126,19 +171,11 @@ npm test
 npm run check
 ```
 
-GitHub currently supports JavaScript actions using the Node.js 24 action runtime; this repository declares `runs.using: node24` in `action.yml`.
-
 ## Scope
 
-This action intentionally does not define compatibility semantics for your software. It only allocates a calendar-derived release identifier with a per-month patch sequence.
+This action does not define compatibility semantics, support windows, or release cadence for your project. It only turns a release calendar date plus repository tag history into a version identifier according to the selected format.
 
-The selected scheme is specifically:
-
-```text
-YYYY.M.PATCH
-```
-
-where `PATCH` starts at `0` for the first release observed in a given year/month and increments from the highest existing matching tag.
+Release-trigger orchestration is intentionally outside the action's core scope.
 
 ## License and third-party notices
 

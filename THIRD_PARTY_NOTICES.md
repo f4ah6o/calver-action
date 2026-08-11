@@ -8,13 +8,16 @@ Names and links are used only to identify the versioning convention and platform
 
 ## CalVer / calver.org
 
-This project implements a `YYYY.M.PATCH` calendar-version allocation policy inspired by the Calendar Versioning convention documented by the CalVer project.
+This project implements configurable calendar-version formatting using terminology documented by the Calendar Versioning project, including `YYYY`, `YY`, `0Y`, `MM`, `0M`, `WW`, `0W`, `DD`, and `0D`.
+
+The `PATCH` token is an independent extension implemented by this project for automatic collision sequencing; it is not represented as an official CalVer calendar token.
 
 - Project site: https://calver.org/
+- Overview and scheme terminology: https://calver.org/overview.html
 - About: https://calver.org/about.html
 - Source repository: https://github.com/mahmoud/calver
 
-No CalVer source code is incorporated into this repository. The CalVer repository's license metadata is not asserted by GitHub's license API at the time this notice was prepared; its repository contains its own `LICENSE` file. Consult the upstream project for the applicable terms of upstream content.
+No CalVer source code is incorporated into this repository. Consult the upstream project for the applicable terms of upstream content.
 
 ## GitHub Actions
 
