@@ -8,6 +8,22 @@ CalVer itself is a calendar-based software versioning convention with multiple v
 
 This repository also provides opinionated reusable workflows for publishing Rust crates and npm packages with CalVer.
 
+## Agent skill
+
+Install the bundled release-integration skill with GitHub CLI:
+
+```bash
+gh skill install f4ah6o/calver-action calver-release
+```
+
+For user scope, add `--scope user`. Preview it before installation with:
+
+```bash
+gh skill preview f4ah6o/calver-action calver-release
+```
+
+The skill teaches an agent how to choose the Rust/npm reusable workflow, migrate from `vYYYY.MM.PATCH` tags to prefixless tags without resetting `PATCH`, choose registry publication policy, and embed release-source provenance.
+
 ## Core action
 
 ```yaml
