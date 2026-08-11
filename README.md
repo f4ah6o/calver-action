@@ -1,12 +1,14 @@
 # calver-action
 
-> **Unofficial project.** This GitHub Action is not affiliated with, endorsed by, or maintained by the CalVer project, calver.org, its maintainers, or GitHub, Inc.
+> **Unofficial project.** This GitHub Action is not affiliated with, endorsed by, or maintained by the CalVer project, calver.org, its maintainers, GitHub, crates.io, or npm.
 
 A small format-driven GitHub Action that allocates Calendar Versioning release identifiers from the workflow runtime date and existing immutable Git tags.
 
 CalVer itself is a calendar-based software versioning convention with multiple valid schemes rather than one mandatory format. See https://calver.org/overview.html and https://calver.org/about.html.
 
-## Quick start
+This repository also provides opinionated reusable workflows for publishing Rust crates and npm packages with CalVer.
+
+## Core action
 
 ```yaml
 - uses: f4ah6o/calver-action@<commit-sha>
@@ -19,6 +21,94 @@ CalVer itself is a calendar-based software versioning convention with multiple v
 ```
 
 For a run on August 11, 2026, the default format allocates `2026.8.0` when no matching tag exists, then `2026.8.1`, `2026.8.2`, and so on.
+
+## Reusable release workflows
+
+### Rust / crates.io
+
+A caller can stay very small:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - latest
+
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+    uses: f4ah6o/calver-action/.github/workflows/rust-crate.yaml@<commit-sha>
+    with:
+      format: YYYY.MM.PATCH
+      timezone: Asia/Tokyo
+      legacy_prefixes: v
+      provenance_file: src/release-commit.txt
+```
+
+The reusable workflow:
+
+1. checks that the selected source commit belongs to `source_branch` (default `main`), but does **not** require it to be branch HEAD;
+2. allocates the next CalVer;
+3. optionally writes the selected source commit's 7-character SHA to `provenance_file`;
+4. updates `Cargo.toml` / `Cargo.lock` in a release-only commit;
+5. runs fmt, clippy, tests, and `cargo package`;
+6. publishes through crates.io OIDC using `rust-lang/crates-io-auth-action`;
+7. creates an immutable CalVer tag pointing at the release-only commit.
+
+The release-only commit is not merged back into the development branch, so normal development may remain ahead of the selected release source.
+
+### npm
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - latest
+
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+    uses: f4ah6o/calver-action/.github/workflows/npm.yaml@<commit-sha>
+    with:
+      format: YYYY.MM.PATCH
+      timezone: Asia/Tokyo
+      provenance_file: src/release-commit.txt
+      access: public
+```
+
+The npm workflow follows the same release-only-commit model. It updates `package.json` and lock metadata with `npm version --no-git-tag-version`, runs `npm ci`, optional build/tests, `npm pack --dry-run`, publishes with npm Trusted Publishing (OIDC), and creates the immutable CalVer tag.
+
+For npm Trusted Publishing, configure the npm package's trusted publisher for the **calling workflow filename** in the package repository. npm's reusable-workflow validation uses the caller workflow identity. The caller must grant `id-token: write` as shown above.
+
+### Embedded source provenance
+
+Package versions stay pure CalVer:
+
+```text
+2026.8.1
+```
+
+Source identity is separate. When `provenance_file` is set, the reusable workflow writes the release source SHA into the published package before packaging:
+
+```text
+a1b2c3d
+```
+
+A CLI can then expose it without changing registry version semantics. For example, a Rust program can package `src/release-commit.txt` and render:
+
+```text
+mycli 2026.8.1 (a1b2c3d)
+```
+
+The file path is repository-relative and must be included in the package published by the project.
 
 ## Formats
 
@@ -41,10 +131,10 @@ Examples:
 
 ```text
 YYYY.MM.PATCH   -> 2026.8.0
-YY.0M.PATCH    -> 26.08.0
-YYYY.0M.0D     -> 2026.08.11
-YYYY-0M-0D     -> 2026-08-11
-YYYY.WW.PATCH  -> 2026.32.0
+YY.0M.PATCH     -> 26.08.0
+YYYY.0M.0D      -> 2026.08.11
+YYYY-0M-0D      -> 2026-08-11
+YYYY.WW.PATCH   -> 2026.32.0
 ```
 
 `PATCH` is not a CalVer calendar token from calver.org; this action adds it as an automatic monotonically increasing counter within the selected rendered calendar bucket. If a format omits `PATCH`, a second release that would produce an existing tag fails with a collision error instead of silently changing the format.
@@ -66,7 +156,7 @@ For `format: YYYY.WW.PATCH`, the counter is scoped to the rendered year/week ins
 
 ## Release trigger patterns
 
-The action only allocates or creates a CalVer tag; it does **not** require a particular release trigger.
+The core action and reusable workflows do **not** require a particular release trigger.
 
 A movable tag such as `latest` is one useful pattern:
 
@@ -75,16 +165,9 @@ git tag -f latest <commit-to-release>
 git push -f origin latest
 ```
 
-```yaml
-on:
-  push:
-    tags:
-      - latest
-```
+The selected release commit may be behind current `main`; reusable workflows only require it to be in the configured branch history.
 
-The release commit does not need to be the current branch HEAD. Normal development may continue ahead of the commit selected for release. Whether the selected commit must belong to a particular branch is a policy for the consuming workflow, not this action.
-
-Other triggers such as `workflow_dispatch`, GitHub Releases, or branch workflows can call the same action without changes to its version-allocation behavior.
+Other triggers such as `workflow_dispatch`, GitHub Releases, or branch workflows can invoke the same reusable workflows later without changing CalVer allocation. Trigger expansion is intentionally not built into the action itself.
 
 ## Runtime date
 
@@ -95,8 +178,6 @@ with:
   timezone: Asia/Tokyo
 ```
 
-A run after midnight in Japan therefore uses the new Japanese calendar date even when it is still the previous UTC date.
-
 For deterministic tests or replay:
 
 ```yaml
@@ -105,18 +186,16 @@ with:
   fetch_tags: false
 ```
 
-## Creating tags
+## Creating tags directly
 
-By default the action only allocates a version and returns outputs.
+By default the core action only allocates a version and returns outputs.
 
 ```yaml
 with:
   create_tag: true
 ```
 
-With `create_tag: true`, the action creates and pushes the immutable tag to `target` (`GITHUB_SHA`, then `HEAD`, by default). The checkout credentials need tag-push permission, typically `permissions: contents: write`.
-
-Concurrent releases that race for the same `PATCH` refresh remote tags and retry allocation.
+With `create_tag: true`, the action creates and pushes the immutable tag to `target` (`GITHUB_SHA`, then `HEAD`, by default). Concurrent releases that race for the same `PATCH` refresh remote tags and retry allocation.
 
 ## Prefix migration
 
@@ -136,7 +215,7 @@ with:
 
 For example, with `format: YYYY.MM.PATCH`, if `v2026.8.3` exists, the next prefixless tag is `2026.8.4`.
 
-## Inputs
+## Core action inputs
 
 | Input | Default | Description |
 | --- | --- | --- |
@@ -150,7 +229,7 @@ For example, with `format: YYYY.MM.PATCH`, if `v2026.8.3` exists, the next prefi
 | `target` | `GITHUB_SHA` / `HEAD` | Git object to tag |
 | `retries` | `5` | Tag-allocation attempts for concurrent PATCH races |
 
-## Outputs
+## Core action outputs
 
 | Output | Example |
 | --- | --- |
@@ -162,20 +241,22 @@ For example, with `format: YYYY.MM.PATCH`, if `v2026.8.3` exists, the next prefi
 | `day` | `11` |
 | `patch` | `0`, or empty when the format has no `PATCH` |
 
+Reusable Rust/npm workflows additionally expose `source_sha` and `short_sha`.
+
 ## Development
 
-The action uses only the Node.js standard library at runtime.
+The core action uses only the Node.js standard library at runtime.
 
 ```bash
 npm test
 npm run check
 ```
 
+All workflow files use the `.yaml` extension.
+
 ## Scope
 
-This action does not define compatibility semantics, support windows, or release cadence for your project. It only turns a release calendar date plus repository tag history into a version identifier according to the selected format.
-
-Release-trigger orchestration is intentionally outside the action's core scope.
+The core action determines version identifiers. The reusable workflows provide opinionated package release orchestration for crates.io and npm. Neither defines compatibility semantics for your software.
 
 ## License and third-party notices
 

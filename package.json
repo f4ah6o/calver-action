@@ -2,7 +2,7 @@
   "name": "calver-action",
   "version": "0.0.0-private",
   "private": true,
-  "description": "Unofficial GitHub Action for allocating YYYY.M.PATCH CalVer release tags",
+  "description": "Unofficial format-driven CalVer GitHub Action with Rust and npm release workflows",
   "scripts": {
     "test": "node --test",
     "check": "node --check src/calver.js && node --check src/index.js && node --test"

@@ -1,0 +1,245 @@
+name: Release Rust crate with CalVer
+
+on:
+  workflow_call:
+    inputs:
+      format:
+        description: CalVer format passed to calver-action.
+        required: false
+        type: string
+        default: YYYY.MM.PATCH
+      timezone:
+        description: IANA timezone used for the release calendar date.
+        required: false
+        type: string
+        default: UTC
+      tag_prefix:
+        description: Prefix for new immutable release tags.
+        required: false
+        type: string
+        default: ''
+      legacy_prefixes:
+        description: Comma-separated legacy tag prefixes considered for PATCH allocation.
+        required: false
+        type: string
+        default: ''
+      source_branch:
+        description: Branch whose history must contain the release source commit.
+        required: false
+        type: string
+        default: main
+      working_directory:
+        description: Directory containing the crate Cargo.toml.
+        required: false
+        type: string
+        default: .
+      provenance_file:
+        description: Optional repository-relative file that receives the 7-character release source commit SHA and is included in the release-only commit.
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: Published crate version.
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: Immutable release tag.
+        value: ${{ jobs.release.outputs.tag }}
+      source_sha:
+        description: Full source commit SHA selected by the caller.
+        value: ${{ jobs.release.outputs.source_sha }}
+      short_sha:
+        description: Seven-character source commit SHA.
+        value: ${{ jobs.release.outputs.short_sha }}
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: calver-rust-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      version: ${{ steps.calver.outputs.version }}
+      tag: ${{ steps.calver.outputs.tag }}
+      source_sha: ${{ steps.source.outputs.sha }}
+      short_sha: ${{ steps.source.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify release source belongs to source branch
+        id: source
+        shell: bash
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/${SOURCE_BRANCH}"; then
+            echo "::error::Release source ${GITHUB_SHA} is not in origin/${SOURCE_BRANCH} history."
+            exit 1
+          fi
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Allocate CalVer
+        id: calver
+        uses: f4ah6o/calver-action@30bf5153ad1c2fc5c3a110effe95e97bddf9f59e
+        with:
+          format: ${{ inputs.format }}
+          timezone: ${{ inputs.timezone }}
+          prefix: ${{ inputs.tag_prefix }}
+          legacy_prefixes: ${{ inputs.legacy_prefixes }}
+          create_tag: false
+
+      - name: Embed source provenance
+        if: inputs.provenance_file != ''
+        shell: bash
+        env:
+          PROVENANCE_FILE: ${{ inputs.provenance_file }}
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PROVENANCE_FILE")"
+          printf '%s' "$SHORT_SHA" > "$PROVENANCE_FILE"
+
+      - name: Set crate version
+        shell: bash
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="${WORKING_DIRECTORY%/}/Cargo.toml"
+          python3 - "$manifest" "$VERSION" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          version = sys.argv[2]
+          text = path.read_text()
+          updated, count = re.subn(
+              r'(?m)^(version\s*=\s*")[^"]+("\s*)$',
+              rf'\g<1>{version}\2',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(
+                  "could not update a direct package version in " + str(path)
+              )
+          path.write_text(updated)
+          PY
+          cargo check --manifest-path "$manifest"
+
+      - name: Validate release
+        shell: bash
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          manifest="${WORKING_DIRECTORY%/}/Cargo.toml"
+          cargo fmt --check --manifest-path "$manifest"
+          cargo clippy --manifest-path "$manifest" --all-targets --all-features -- -D warnings
+          cargo test --manifest-path "$manifest" --all-targets
+          cargo package --manifest-path "$manifest" --locked --allow-dirty
+
+      - name: Read crate metadata
+        id: crate
+        shell: bash
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          manifest="${WORKING_DIRECTORY%/}/Cargo.toml"
+          metadata=$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1)
+          name=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["packages"][0]["name"])' <<<"$metadata")
+          workspace_root=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["workspace_root"])' <<<"$metadata")
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "workspace_root=${workspace_root}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release commit locally
+        shell: bash
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          WORKSPACE_ROOT: ${{ steps.crate.outputs.workspace_root }}
+          PROVENANCE_FILE: ${{ inputs.provenance_file }}
+          CRATE_NAME: ${{ steps.crate.outputs.name }}
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${WORKING_DIRECTORY%/}/Cargo.toml"
+          if [[ -f "${WORKSPACE_ROOT}/Cargo.lock" ]]; then
+            git add "${WORKSPACE_ROOT}/Cargo.lock"
+          fi
+          if [[ -n "$PROVENANCE_FILE" ]]; then
+            git add "$PROVENANCE_FILE"
+          fi
+          git commit -m "chore: release ${CRATE_NAME} ${VERSION}"
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish crate if needed
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          CRATE_NAME: ${{ steps.crate.outputs.name }}
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="${WORKING_DIRECTORY%/}/Cargo.toml"
+          if curl --silent --fail --output /dev/null \
+            "https://crates.io/api/v1/crates/${CRATE_NAME}/${VERSION}"; then
+            echo "::notice::${CRATE_NAME} ${VERSION} is already on crates.io; skipping cargo publish."
+          else
+            cargo publish --manifest-path "$manifest" --locked
+          fi
+
+      - name: Push immutable release tag
+        shell: bash
+        env:
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG" HEAD
+          git push origin "refs/tags/${TAG}"
+
+      - name: Summary
+        shell: bash
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+          TAG: ${{ steps.calver.outputs.tag }}
+          CRATE_NAME: ${{ steps.crate.outputs.name }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        run: |
+          {
+            echo "## Rust crate release"
+            echo
+            echo "- crate: `${CRATE_NAME}`"
+            echo "- version: `${VERSION}`"
+            echo "- tag: `${TAG}`"
+            echo "- source: `${SOURCE_SHA}` (`${SHORT_SHA}`)"
+          } >> "$GITHUB_STEP_SUMMARY"

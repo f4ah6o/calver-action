@@ -1,0 +1,232 @@
+name: Release npm package with CalVer
+
+on:
+  workflow_call:
+    inputs:
+      format:
+        description: CalVer format passed to calver-action.
+        required: false
+        type: string
+        default: YYYY.MM.PATCH
+      timezone:
+        description: IANA timezone used for the release calendar date.
+        required: false
+        type: string
+        default: UTC
+      tag_prefix:
+        description: Prefix for new immutable release tags.
+        required: false
+        type: string
+        default: ''
+      legacy_prefixes:
+        description: Comma-separated legacy tag prefixes considered for PATCH allocation.
+        required: false
+        type: string
+        default: ''
+      source_branch:
+        description: Branch whose history must contain the release source commit.
+        required: false
+        type: string
+        default: main
+      working_directory:
+        description: Directory containing package.json.
+        required: false
+        type: string
+        default: .
+      node_version:
+        description: Node.js version used for release validation and publishing.
+        required: false
+        type: string
+        default: '24'
+      access:
+        description: Optional npm publish access value such as public or restricted.
+        required: false
+        type: string
+        default: ''
+      provenance_file:
+        description: Optional repository-relative file that receives the 7-character release source commit SHA and is included in the release-only commit.
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: Published npm package version.
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: Immutable release tag.
+        value: ${{ jobs.release.outputs.tag }}
+      source_sha:
+        description: Full source commit SHA selected by the caller.
+        value: ${{ jobs.release.outputs.source_sha }}
+      short_sha:
+        description: Seven-character source commit SHA.
+        value: ${{ jobs.release.outputs.short_sha }}
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: calver-npm-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      version: ${{ steps.calver.outputs.version }}
+      tag: ${{ steps.calver.outputs.tag }}
+      source_sha: ${{ steps.source.outputs.sha }}
+      short_sha: ${{ steps.source.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify release source belongs to source branch
+        id: source
+        shell: bash
+        working-directory: .
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/${SOURCE_BRANCH}"; then
+            echo "::error::Release source ${GITHUB_SHA} is not in origin/${SOURCE_BRANCH} history."
+            exit 1
+          fi
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install --global npm@11
+
+      - name: Allocate CalVer
+        id: calver
+        uses: f4ah6o/calver-action@30bf5153ad1c2fc5c3a110effe95e97bddf9f59e
+        with:
+          format: ${{ inputs.format }}
+          timezone: ${{ inputs.timezone }}
+          prefix: ${{ inputs.tag_prefix }}
+          legacy_prefixes: ${{ inputs.legacy_prefixes }}
+          create_tag: false
+
+      - name: Embed source provenance
+        if: inputs.provenance_file != ''
+        shell: bash
+        working-directory: .
+        env:
+          PROVENANCE_FILE: ${{ inputs.provenance_file }}
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PROVENANCE_FILE")"
+          printf '%s' "$SHORT_SHA" > "$PROVENANCE_FILE"
+
+      - name: Set package version
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working_directory }}
+        run: npm ci
+
+      - name: Validate package
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          npm run build --if-present
+          npm run test --if-present
+          npm pack --dry-run
+
+      - name: Read package metadata
+        id: package
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          name=$(node -p 'require("./package.json").name')
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release commit locally
+        shell: bash
+        working-directory: .
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          PROVENANCE_FILE: ${{ inputs.provenance_file }}
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${WORKING_DIRECTORY%/}/package.json"
+          if [[ -f "${WORKING_DIRECTORY%/}/package-lock.json" ]]; then
+            git add "${WORKING_DIRECTORY%/}/package-lock.json"
+          fi
+          if [[ -f "${WORKING_DIRECTORY%/}/npm-shrinkwrap.json" ]]; then
+            git add "${WORKING_DIRECTORY%/}/npm-shrinkwrap.json"
+          fi
+          if [[ -n "$PROVENANCE_FILE" ]]; then
+            git add "$PROVENANCE_FILE"
+          fi
+          git commit -m "chore: release ${PACKAGE_NAME} ${VERSION}"
+
+      - name: Publish package if needed
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.calver.outputs.version }}
+          ACCESS: ${{ inputs.access }}
+        run: |
+          set -euo pipefail
+          if npm view "${PACKAGE_NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::${PACKAGE_NAME} ${VERSION} is already on npm; skipping npm publish."
+          elif [[ -n "$ACCESS" ]]; then
+            npm publish --access "$ACCESS"
+          else
+            npm publish
+          fi
+
+      - name: Push immutable release tag
+        shell: bash
+        working-directory: .
+        env:
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG" HEAD
+          git push origin "refs/tags/${TAG}"
+
+      - name: Summary
+        shell: bash
+        working-directory: .
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+          TAG: ${{ steps.calver.outputs.tag }}
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        run: |
+          {
+            echo "## npm release"
+            echo
+            echo "- package: `${PACKAGE_NAME}`"
+            echo "- version: `${VERSION}`"
+            echo "- tag: `${TAG}`"
+            echo "- source: `${SOURCE_SHA}` (`${SHORT_SHA}`)"
+          } >> "$GITHUB_STEP_SUMMARY"
