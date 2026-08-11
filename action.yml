@@ -1,0 +1,54 @@
+name: Unofficial CalVer
+
+description: Compute and optionally create the next YYYY.M.PATCH release tag from existing Git tags.
+author: f4ah6o
+
+inputs:
+  timezone:
+    description: IANA timezone used to determine the release year and month.
+    required: false
+    default: UTC
+  prefix:
+    description: Optional prefix for immutable release tags. Empty means tags like 2026.8.0.
+    required: false
+    default: ''
+  date:
+    description: Optional YYYY-MM-DD override for deterministic runs and tests. Defaults to the workflow runtime date.
+    required: false
+    default: ''
+  fetch_tags:
+    description: Fetch and force-refresh tags from origin before allocating a version.
+    required: false
+    default: 'true'
+  create_tag:
+    description: Create and push the allocated immutable release tag.
+    required: false
+    default: 'false'
+  target:
+    description: Git object to tag. Defaults to GITHUB_SHA, then HEAD.
+    required: false
+    default: ''
+  retries:
+    description: Maximum allocation attempts when create_tag is true and another release wins the same PATCH concurrently.
+    required: false
+    default: '5'
+
+outputs:
+  version:
+    description: Allocated CalVer without a tag prefix, for example 2026.8.0.
+  tag:
+    description: Allocated immutable Git tag, including prefix when configured.
+  year:
+    description: Four-digit release year.
+  month:
+    description: Numeric release month without zero padding.
+  patch:
+    description: Numeric patch sequence within the release month.
+
+runs:
+  using: node24
+  main: src/index.js
+
+branding:
+  icon: calendar
+  color: blue
