@@ -1,6 +1,6 @@
 ---
 name: calver-release
-description: Add or maintain CalVer release automation for Rust crates, Go modules, and npm packages using f4ah6o/calver-action. Use when configuring calendar releases, movable release tags such as latest, registry publish/no-publish policy, Go-module-compatible CalVer mapping, legacy tag prefixes, or embedded Git SHA provenance.
+description: Add or maintain CalVer release automation for Rust crates, Go modules, and npm packages using f4ah6o/calver-action, including cargo-dist handoff. Use when configuring calendar releases, movable release tags such as latest, registry publish/no-publish policy, Go-module-compatible CalVer mapping, legacy tag prefixes, embedded Git SHA provenance, or cargo-dist GitHub Release artifacts.
 license: MIT
 ---
 
@@ -134,6 +134,64 @@ jobs:
 
 If `registry_publish: false`, `id-token: write` is not needed for crates.io authentication, but leaving it present is harmless. Prefer least privilege when editing an existing repository.
 
+## cargo-dist integration
+
+When a Rust CLI uses cargo-dist for GitHub Release artifacts, keep the immutable CalVer tag as the handoff boundary.
+
+Use a Cargo-style SemVer-compatible CalVer such as `YYYY.MM.PATCH`. cargo-dist's generated workflow parses the release tag as a Cargo-style SemVer version; formats such as `YYYY-0M-0D` are not interchangeable for this integration.
+
+Enable cargo-dist dispatch generation:
+
+```toml
+[workspace.metadata.dist]
+dispatch-releases = true
+```
+
+Then regenerate with the project's pinned dist version and verify the generated workflow is clean:
+
+```bash
+dist generate
+dist generate --check
+dist manifest --artifacts=all --output-format=json --no-local-paths
+```
+
+Do **not** rely on the immutable tag pushed with `GITHUB_TOKEN` to trigger a second `push.tags` workflow. GitHub suppresses most recursive workflow runs caused by `GITHUB_TOKEN`. Explicitly dispatch cargo-dist after the CalVer release job succeeds.
+
+Prefer the bundled reusable workflow:
+
+```yaml
+jobs:
+  publish:
+    permissions:
+      contents: write
+      id-token: write
+    uses: f4ah6o/calver-action/.github/workflows/rust-crate.yaml@<commit-sha>
+    with:
+      format: YYYY.MM.PATCH
+      timezone: Asia/Tokyo
+      tag_prefix: v
+
+  dist-release:
+    needs: publish
+    permissions:
+      actions: write
+      contents: read
+    uses: f4ah6o/calver-action/.github/workflows/cargo-dist.yaml@<commit-sha>
+    with:
+      tag: ${{ needs.publish.outputs.tag }}
+```
+
+The cargo-dist helper passes the immutable tag as both the target workflow ref and the generated workflow's `tag` input. This is deliberate: the tag points at the release-only commit containing the final Cargo version, so cargo-dist builds the same source/version that was published to crates.io.
+
+Keep one owner for each publication side effect. A clean split is:
+
+- `rust-crate.yaml`: CalVer allocation, release-only commit, crates.io publication, immutable tag;
+- cargo-dist: binaries/installers/checksums and GitHub Release assets.
+
+If cargo-dist alone fails after the immutable tag exists, rerun or redispatch cargo-dist for that existing tag. Do not allocate a new CalVer merely to retry artifact generation.
+
+See `docs/cargo-dist.md` / `docs/cargo-dist.ja.md` for the full integration rationale and recovery model.
+
 ## Go reusable workflow
 
 Use the Go workflow for a repository or subdirectory containing `go.mod`:
@@ -204,7 +262,8 @@ Before committing integration changes:
 4. Check existing release tags and configure `legacy_prefixes` if changing prefix convention.
 5. For Go, verify the canonical module version and nested-module tag prefix; never let the calendar year become an unintended semantic major version.
 6. If using provenance, verify the file is included in the released artifact or consumed by the build.
-7. Do not move `latest` unless the user explicitly intends to trigger a release.
+7. For cargo-dist, run `dist generate --check` and verify the release workflow accepts `workflow_dispatch` with a tag input.
+8. Do not move `latest` unless the user explicitly intends to trigger a release.
 
 ## Scope
 

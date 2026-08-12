@@ -1,0 +1,52 @@
+name: Dispatch cargo-dist release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Immutable CalVer tag created by the release workflow.
+        required: true
+        type: string
+      workflow_file:
+        description: cargo-dist generated workflow filename.
+        required: false
+        type: string
+        default: release.yml
+      tag_input:
+        description: workflow_dispatch input name that receives the release tag.
+        required: false
+        type: string
+        default: tag
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch cargo-dist from immutable release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          WORKFLOW_FILE: ${{ inputs.workflow_file }}
+          TAG_INPUT: ${{ inputs.tag_input }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAG" ]]; then
+            echo "::error::A non-empty immutable release tag is required."
+            exit 1
+          fi
+          gh workflow run "$WORKFLOW_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$TAG" \
+            -f "${TAG_INPUT}=${TAG}"
+
+          {
+            echo "## cargo-dist dispatch"
+            echo
+            echo "- workflow: \`${WORKFLOW_FILE}\`"
+            echo "- ref: \`${TAG}\`"
+            echo "- ${TAG_INPUT}: \`${TAG}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
