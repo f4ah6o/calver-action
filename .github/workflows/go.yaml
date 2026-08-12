@@ -122,14 +122,20 @@ jobs:
             directory="${directory#./}"
             resolved="${directory}/v"
           fi
+          dependency_path="${directory}/go.mod"
+          if [[ -f "${directory}/go.sum" ]]; then
+            dependency_path="${directory}/go.sum"
+          fi
           echo "working_directory=${directory}" >> "$GITHUB_OUTPUT"
           echo "tag_prefix=${resolved}" >> "$GITHUB_OUTPUT"
+          echo "cache_dependency_path=${dependency_path}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: ${{ steps.go_meta.outputs.working_directory }}/go.mod
           cache: true
+          cache-dependency-path: ${{ steps.go_meta.outputs.cache_dependency_path }}
 
       - name: Allocate Go-compatible CalVer
         id: calver
@@ -165,9 +171,14 @@ jobs:
 
           major="${BASH_REMATCH[1]}"
           module_path=$(cd "$WORKING_DIRECTORY" && go list -m -f '{{.Path}}')
-          if (( major >= 2 )) && [[ "$module_path" != */v"$major" ]]; then
-            echo "::error::Go module ${module_path} must end in /v${major} for version ${version}."
-            exit 1
+          if (( major >= 2 )); then
+            case "$module_path" in
+              */v"$major"|gopkg.in/*.v"$major") ;;
+              *)
+                echo "::error::Go module ${module_path} must end in /v${major}, or .v${major} for gopkg.in, for version ${version}."
+                exit 1
+                ;;
+            esac
           fi
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
