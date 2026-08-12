@@ -2,7 +2,7 @@
 
 ## Unofficial-project notice
 
-`calver-action` is an independent, unofficial project. It is not affiliated with, endorsed by, sponsored by, or maintained by the CalVer project, calver.org, its maintainers, GitHub, Inc., crates.io, the Rust project, npm, Inc., or the Node.js project.
+`calver-action` is an independent, unofficial project. It is not affiliated with, endorsed by, sponsored by, or maintained by the CalVer project, calver.org, its maintainers, GitHub, Inc., crates.io, the Rust project, the Go project, npm, Inc., or the Node.js project.
 
 Names and links are used only to identify conventions, registries, runtimes, and tools that this software interoperates with.
 
@@ -33,6 +33,11 @@ The reusable workflows call the following third-party or upstream-maintained Git
 - Repository: https://github.com/actions/setup-node
 - License: MIT
 
+### actions/setup-go
+
+- Repository: https://github.com/actions/setup-go
+- License: MIT
+
 ### dtolnay/rust-toolchain
 
 - Repository: https://github.com/dtolnay/rust-toolchain
@@ -56,6 +61,14 @@ The `rust-crate.yaml` reusable workflow publishes Rust crates to crates.io and o
 - Documentation: https://doc.rust-lang.org/cargo/reference/publishing.html
 
 No crates.io source code is incorporated into this repository.
+
+## Go
+
+The `go.yaml` reusable workflow validates Go modules and creates Go-compatible VCS tags. It uses Go's Semantic Import Versioning conventions and does not redistribute the Go toolchain.
+
+- Project: https://go.dev/
+- Modules reference: https://go.dev/ref/mod
+- License information: https://go.dev/LICENSE
 
 ## npm
 

@@ -81,6 +81,25 @@ test('PATCH sequence follows the selected format bucket', () => {
   );
 });
 
+test('allocates a Go-compatible stable-major CalVer mapping', () => {
+  assert.deepEqual(
+    allocate(['v1.202608.0', 'v1.202608.3', 'v1.202607.99'], {
+      dateInput: '2026-08-11',
+      format: '1.YYYY0M.PATCH',
+      prefix: 'v',
+    }),
+    {
+      version: '1.202608.4',
+      tag: 'v1.202608.4',
+      year: 2026,
+      month: 8,
+      week: 32,
+      day: 11,
+      patch: 4,
+    },
+  );
+});
+
 test('formats without PATCH reject duplicate release identifiers', () => {
   assert.throws(
     () => allocate(['2026.08.11'], { dateInput: '2026-08-11', format: 'YYYY.0M.0D' }),

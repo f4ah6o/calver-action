@@ -1,6 +1,6 @@
 ---
 name: calver-release
-description: Add or maintain CalVer release automation for Rust crates and npm packages using f4ah6o/calver-action, including cargo-dist handoff. Use when configuring YYYY.MM.PATCH-style releases, movable release tags such as latest, registry publish/no-publish policy, legacy v-prefixed tags, embedded Git SHA provenance, or cargo-dist GitHub Release artifacts.
+description: Add or maintain CalVer release automation for Rust crates, Go modules, and npm packages using f4ah6o/calver-action, including cargo-dist handoff. Use when configuring calendar releases, movable release tags such as latest, registry publish/no-publish policy, Go-module-compatible CalVer mapping, legacy tag prefixes, embedded Git SHA provenance, or cargo-dist GitHub Release artifacts.
 license: MIT
 ---
 
@@ -12,73 +12,61 @@ Use this skill when a repository needs calendar-based release automation backed 
 
 Keep these concepts separate:
 
-- **CalVer package version**: registry-compatible version such as `2026.8.1`.
+- **CalVer package/display version**: the calendar-derived release identifier.
+- **Ecosystem version**: a registry or module-compatible version when an ecosystem imposes extra rules.
 - **Source provenance**: release source commit SHA, embedded separately when useful for CLI `-V` output.
-- **Git tag**: immutable CalVer release tag.
+- **Git tag**: immutable release tag.
 - **Release trigger**: commonly a movable `latest` tag, but the reusable workflows do not require a particular trigger.
 - **Registry publication**: independent from GitHub repository visibility.
 
-Do not encode a Git SHA into the package version merely to expose provenance. Prefer pure CalVer plus a provenance file.
+Do not encode a Git SHA into the package version merely to expose provenance. Prefer a version plus separate source provenance.
 
 ## Detect the package type
 
 - `Cargo.toml` -> use `.github/workflows/rust-crate.yaml`.
+- `go.mod` -> use `.github/workflows/go.yaml`.
 - `package.json` -> use `.github/workflows/npm.yaml`.
 
-If both exist, identify which package is being released and set `working_directory` accordingly.
+If more than one exists, identify which package/module is being released and set `working_directory` accordingly.
 
 ## Default CalVer
 
-Prefer:
+For Rust and npm prefer:
 
 ```yaml
 format: YYYY.MM.PATCH
 timezone: Asia/Tokyo
 ```
 
-Use another supported format only when the project already has a different CalVer convention. Supported calendar tokens are `YYYY`, `YY`, `0Y`, `MM`, `0M`, `WW`, `0W`, `DD`, and `0D`. `PATCH` is an extension provided by this action for collision sequencing.
+For Go, do **not** use the calendar year as the semantic major version. Prefer the Go workflow default:
 
-## Legacy `v` tag migration
+```yaml
+format: 1.YYYY0M.PATCH
+timezone: Asia/Tokyo
+```
 
-The action can absorb the difference between old `vYYYY.MM.PATCH` tags and new prefixless `YYYY.MM.PATCH` tags.
+It maps August 2026 to Go module version `v1.202608.0` while separately exposing human-facing CalVer `2026.8.0`. This keeps the semantic major stable across calendar years and avoids forcing `/vYYYY` into the Go module path.
 
-To continue the same PATCH sequence while dropping `v` from new tags:
+Use another supported format only when the project already has a compatible convention. Supported calendar tokens are `YYYY`, `YY`, `0Y`, `MM`, `0M`, `WW`, `0W`, `DD`, and `0D`. `PATCH` is an extension provided by this action for collision sequencing.
+
+## Legacy tag migration
+
+For Rust/npm, the action can absorb the difference between old `vYYYY.MM.PATCH` tags and new prefixless `YYYY.MM.PATCH` tags:
 
 ```yaml
 tag_prefix: ''
 legacy_prefixes: v
 ```
 
-Example:
-
-```text
-v2026.8.0
-v2026.8.3
-
-next new tag -> 2026.8.4
-```
-
 The allocator considers both the current prefix and all `legacy_prefixes` when finding the highest existing PATCH. Do not reset PATCH merely because a tag prefix convention changed.
+
+For Go, preserve a canonical `vMAJOR.MINOR.PATCH` basename. A root module defaults to prefix `v`; a nested module such as `tools/foo` defaults to `tools/foo/v`. Configure `legacy_prefixes` only for a real migration and make sure every new tag remains valid for Go modules.
 
 ## Registry publication policy
 
-Repository visibility and registry publication are separate axes.
+Repository visibility and registry publication are separate axes for Rust/npm.
 
-Use:
-
-```yaml
-registry_publish: true
-```
-
-when publishing to crates.io or npm.
-
-Use:
-
-```yaml
-registry_publish: false
-```
-
-for an internal/version-only release. This still performs CalVer allocation, validation, provenance embedding, release-only commit creation, and immutable tagging; it only skips registry authentication and publication.
+Use `registry_publish: true` when publishing to crates.io or npm. Use `registry_publish: false` for an internal/version-only release; validation, provenance, release-only commit creation, and immutable tagging still run.
 
 For a Rust package that must never be published externally, also consider:
 
@@ -86,6 +74,8 @@ For a Rust package that must never be published externally, also consider:
 [package]
 publish = false
 ```
+
+Go does not use this switch in the reusable workflow. Go module publication is VCS-tag based, so the Go workflow validates the module and pushes the immutable module tag rather than uploading a package to a registry.
 
 ## Source selection
 
@@ -98,11 +88,11 @@ git push -f origin latest
 
 The selected commit does **not** need to be `source_branch` HEAD. Normal development may be ahead. The reusable workflow only requires that the selected source commit belongs to the configured `source_branch` history.
 
-Do not push the release-only version-bump commit back to the development branch. The immutable CalVer tag should retain that release-only commit.
+Do not push a release-only metadata/provenance commit back to the development branch. The immutable release tag should retain that commit.
 
 ## Provenance for CLI versions
 
-For command-line tools, prefer embedding the short release source SHA in a file included in the package:
+For command-line tools, prefer embedding the short release source SHA separately from the version:
 
 ```yaml
 provenance_file: src/release-commit.txt
@@ -114,7 +104,7 @@ Then expose a version string such as:
 mycli 2026.8.1 (a1b2c3d)
 ```
 
-The development checkout may use a stable placeholder such as `dev`. Ensure the provenance file is included in the published package so installation from crates.io/npm preserves the release source SHA.
+The development checkout may use a stable placeholder such as `dev`. Ensure the provenance file is included in the published Rust/npm package, or embedded by the Go project's own build mechanism.
 
 ## Rust reusable workflow
 
@@ -202,6 +192,40 @@ If cargo-dist alone fails after the immutable tag exists, rerun or redispatch ca
 
 See `docs/cargo-dist.md` / `docs/cargo-dist.ja.md` for the full integration rationale and recovery model.
 
+## Go reusable workflow
+
+Use the Go workflow for a repository or subdirectory containing `go.mod`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - latest
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    uses: f4ah6o/calver-action/.github/workflows/go.yaml@<commit-sha>
+    with:
+      timezone: Asia/Tokyo
+```
+
+The default mapping is `2026.8.0` -> `v1.202608.0`. `version` returns the canonical Go module version, `calver` returns the human-facing `YYYY.M.PATCH`, and `tag` returns the full Git tag.
+
+For a nested module:
+
+```yaml
+with:
+  working_directory: tools/foo
+```
+
+The tag prefix is automatically `tools/foo/v`, producing a tag such as `tools/foo/v1.202608.0`.
+
+For an existing v2 module, use `format: 2.YYYY0M.PATCH` and keep the `go.mod` module path ending in `/v2`. The workflow validates v2+ module-path suffixes.
+
 ## npm reusable workflow
 
 ```yaml
@@ -236,9 +260,10 @@ Before committing integration changes:
 2. Run the repository's normal test/check command.
 3. Confirm the reusable workflow is pinned to an immutable commit SHA.
 4. Check existing release tags and configure `legacy_prefixes` if changing prefix convention.
-5. If using provenance, verify the file is included in `cargo package --list` or `npm pack --dry-run`.
-6. For cargo-dist, run `dist generate --check` and verify the release workflow accepts `workflow_dispatch` with a tag input.
-7. Do not move `latest` unless the user explicitly intends to trigger a release.
+5. For Go, verify the canonical module version and nested-module tag prefix; never let the calendar year become an unintended semantic major version.
+6. If using provenance, verify the file is included in the released artifact or consumed by the build.
+7. For cargo-dist, run `dist generate --check` and verify the release workflow accepts `workflow_dispatch` with a tag input.
+8. Do not move `latest` unless the user explicitly intends to trigger a release.
 
 ## Scope
 

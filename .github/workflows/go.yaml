@@ -1,0 +1,260 @@
+name: Release Go module with CalVer
+
+on:
+  workflow_call:
+    inputs:
+      format:
+        description: Go-module-compatible CalVer format passed to calver-action. Keep the SemVer major stable; the default maps YYYYMM to the minor version.
+        required: false
+        type: string
+        default: 1.YYYY0M.PATCH
+      timezone:
+        description: IANA timezone used for the release calendar date.
+        required: false
+        type: string
+        default: UTC
+      tag_prefix:
+        description: Git tag prefix. Empty auto-selects v for a root module or <working_directory>/v for a nested module.
+        required: false
+        type: string
+        default: ''
+      legacy_prefixes:
+        description: Comma-separated legacy tag prefixes considered for PATCH allocation.
+        required: false
+        type: string
+        default: ''
+      source_branch:
+        description: Branch whose history must contain the release source commit.
+        required: false
+        type: string
+        default: main
+      working_directory:
+        description: Repository-relative directory containing go.mod.
+        required: false
+        type: string
+        default: .
+      provenance_file:
+        description: Optional repository-relative file that receives the 7-character release source commit SHA and is included in a release-only commit.
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: Canonical Go module version, for example v1.202608.0.
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: Immutable Git release tag, including a nested-module prefix when applicable.
+        value: ${{ jobs.release.outputs.tag }}
+      calver:
+        description: Human-facing YYYY.M.PATCH value derived from the allocated calendar bucket, for example 2026.8.0.
+        value: ${{ jobs.release.outputs.calver }}
+      source_sha:
+        description: Full source commit SHA selected by the caller.
+        value: ${{ jobs.release.outputs.source_sha }}
+      short_sha:
+        description: Seven-character source commit SHA.
+        value: ${{ jobs.release.outputs.short_sha }}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: calver-go-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+      tag: ${{ steps.calver.outputs.tag }}
+      calver: ${{ steps.versions.outputs.calver }}
+      source_sha: ${{ steps.source.outputs.sha }}
+      short_sha: ${{ steps.source.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify release source belongs to source branch
+        id: source
+        shell: bash
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/${SOURCE_BRANCH}"; then
+            echo "::error::Release source ${GITHUB_SHA} is not in origin/${SOURCE_BRANCH} history."
+            exit 1
+          fi
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Go module tag prefix
+        id: go_meta
+        shell: bash
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          set -euo pipefail
+          directory="${WORKING_DIRECTORY%/}"
+          [[ -n "$directory" ]] || directory="."
+          case "$directory" in
+            /*|..|../*|*/../*|*/..)
+              echo "::error::working_directory must stay within the repository."
+              exit 1
+              ;;
+          esac
+          if [[ ! -f "${directory}/go.mod" ]]; then
+            echo "::error::No go.mod found at ${directory}/go.mod."
+            exit 1
+          fi
+          if [[ -n "$TAG_PREFIX" ]]; then
+            resolved="$TAG_PREFIX"
+          elif [[ "$directory" == "." ]]; then
+            resolved="v"
+          else
+            directory="${directory#./}"
+            resolved="${directory}/v"
+          fi
+          dependency_path="${directory}/go.mod"
+          if [[ -f "${directory}/go.sum" ]]; then
+            dependency_path="${directory}/go.sum"
+          fi
+          echo "working_directory=${directory}" >> "$GITHUB_OUTPUT"
+          echo "tag_prefix=${resolved}" >> "$GITHUB_OUTPUT"
+          echo "cache_dependency_path=${dependency_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ steps.go_meta.outputs.working_directory }}/go.mod
+          cache: true
+          cache-dependency-path: ${{ steps.go_meta.outputs.cache_dependency_path }}
+
+      - name: Allocate Go-compatible CalVer
+        id: calver
+        uses: f4ah6o/calver-action@30bf5153ad1c2fc5c3a110effe95e97bddf9f59e
+        with:
+          format: ${{ inputs.format }}
+          timezone: ${{ inputs.timezone }}
+          prefix: ${{ steps.go_meta.outputs.tag_prefix }}
+          legacy_prefixes: ${{ inputs.legacy_prefixes }}
+          create_tag: false
+
+      - name: Validate Go module version mapping
+        id: versions
+        shell: bash
+        env:
+          TAG: ${{ steps.calver.outputs.tag }}
+          YEAR: ${{ steps.calver.outputs.year }}
+          MONTH: ${{ steps.calver.outputs.month }}
+          PATCH: ${{ steps.calver.outputs.patch }}
+          WORKING_DIRECTORY: ${{ steps.go_meta.outputs.working_directory }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PATCH" ]]; then
+            echo "::error::The Go reusable workflow requires a format containing PATCH."
+            exit 1
+          fi
+
+          version="${TAG##*/}"
+          if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Allocated tag ${TAG} does not end in a canonical Go module version such as v1.202608.0."
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          module_path=$(cd "$WORKING_DIRECTORY" && go list -m -f '{{.Path}}')
+          if (( major >= 2 )); then
+            case "$module_path" in
+              */v"$major"|gopkg.in/*.v"$major") ;;
+              *)
+                echo "::error::Go module ${module_path} must end in /v${major}, or .v${major} for gopkg.in, for version ${version}."
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "calver=${YEAR}.${MONTH}.${PATCH}" >> "$GITHUB_OUTPUT"
+          echo "module_path=${module_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Embed source provenance
+        if: inputs.provenance_file != ''
+        shell: bash
+        env:
+          PROVENANCE_FILE: ${{ inputs.provenance_file }}
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          case "$PROVENANCE_FILE" in
+            /*|..|../*|*/../*|*/..)
+              echo "::error::provenance_file must stay within the repository."
+              exit 1
+              ;;
+          esac
+          mkdir -p "$(dirname "$PROVENANCE_FILE")"
+          printf '%s' "$SHORT_SHA" > "$PROVENANCE_FILE"
+
+      - name: Validate module
+        shell: bash
+        working-directory: ${{ steps.go_meta.outputs.working_directory }}
+        run: |
+          set -euo pipefail
+          go mod download
+          go test ./...
+          go vet ./...
+          go build ./...
+
+      - name: Create release commit locally when provenance changed
+        if: inputs.provenance_file != ''
+        shell: bash
+        env:
+          PROVENANCE_FILE: ${{ inputs.provenance_file }}
+          VERSION: ${{ steps.versions.outputs.version }}
+          MODULE_PATH: ${{ steps.versions.outputs.module_path }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$PROVENANCE_FILE"
+          if git diff --cached --quiet; then
+            echo "::notice::Provenance file is unchanged; tagging the selected source commit directly."
+          else
+            git commit -m "chore: release ${MODULE_PATH} ${VERSION}"
+          fi
+
+      - name: Push immutable release tag
+        shell: bash
+        env:
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG" HEAD
+          git push origin "refs/tags/${TAG}"
+
+      - name: Summary
+        shell: bash
+        env:
+          VERSION: ${{ steps.versions.outputs.version }}
+          CALVER: ${{ steps.versions.outputs.calver }}
+          TAG: ${{ steps.calver.outputs.tag }}
+          MODULE_PATH: ${{ steps.versions.outputs.module_path }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        run: |
+          {
+            echo "## Go module release"
+            echo
+            echo "- module: `${MODULE_PATH}`"
+            echo "- Go version: `${VERSION}`"
+            echo "- CalVer: `${CALVER}`"
+            echo "- tag: `${TAG}`"
+            echo "- source: `${SOURCE_SHA}` (`${SHORT_SHA}`)"
+          } >> "$GITHUB_STEP_SUMMARY"
