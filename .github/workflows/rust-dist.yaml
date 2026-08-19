@@ -1,0 +1,222 @@
+name: Release Rust CLI with CalVer and dist
+
+on:
+  workflow_call:
+    inputs:
+      format:
+        description: CalVer format passed to calver-action. Must remain Cargo SemVer-compatible for dist.
+        required: false
+        type: string
+        default: YYYY.MM.PATCH
+      timezone:
+        description: IANA timezone used for the release calendar date.
+        required: false
+        type: string
+        default: UTC
+      tag_prefix:
+        description: Prefix for new immutable release tags.
+        required: false
+        type: string
+        default: ''
+      legacy_prefixes:
+        description: Comma-separated legacy tag prefixes considered for PATCH allocation.
+        required: false
+        type: string
+        default: ''
+      source_branch:
+        description: Branch whose history must contain the release source commit.
+        required: false
+        type: string
+        default: main
+      working_directory:
+        description: Directory containing the CLI crate Cargo.toml.
+        required: false
+        type: string
+        default: .
+      provenance_file:
+        description: Optional repository-relative file that receives the 7-character release source commit SHA.
+        required: false
+        type: string
+        default: ''
+      registry_publish:
+        description: Publish the crate to crates.io before distributing binaries.
+        required: false
+        type: boolean
+        default: true
+      dist_workflow_file:
+        description: dist-generated workflow filename.
+        required: false
+        type: string
+        default: release.yml
+      dist_tag_input:
+        description: workflow_dispatch input name that receives the immutable release tag.
+        required: false
+        type: string
+        default: tag
+      binstall_acceptance:
+        description: Verify cargo binstall installs this exact release from binary metadata without source-build fallback. Runs only when registry_publish is true.
+        required: false
+        type: boolean
+        default: true
+      release_wait_attempts:
+        description: Number of 10-second attempts to wait for the dist GitHub Release to become published with assets.
+        required: false
+        type: number
+        default: 180
+    outputs:
+      version:
+        description: Published crate version.
+        value: ${{ jobs.publish.outputs.version }}
+      tag:
+        description: Immutable release tag.
+        value: ${{ jobs.publish.outputs.tag }}
+      source_sha:
+        description: Full source commit SHA selected by the caller.
+        value: ${{ jobs.publish.outputs.source_sha }}
+      short_sha:
+        description: Seven-character source commit SHA.
+        value: ${{ jobs.publish.outputs.short_sha }}
+
+permissions:
+  actions: write
+  contents: write
+  id-token: write
+
+concurrency:
+  group: calver-rust-dist-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+      id-token: write
+    uses: $/.github/workflows/rust-crate.yaml
+    with:
+      format: ${{ inputs.format }}
+      timezone: ${{ inputs.timezone }}
+      tag_prefix: ${{ inputs.tag_prefix }}
+      legacy_prefixes: ${{ inputs.legacy_prefixes }}
+      source_branch: ${{ inputs.source_branch }}
+      working_directory: ${{ inputs.working_directory }}
+      provenance_file: ${{ inputs.provenance_file }}
+      registry_publish: ${{ inputs.registry_publish }}
+
+  dist-release:
+    needs: publish
+    permissions:
+      actions: write
+      contents: read
+    uses: $/.github/workflows/cargo-dist.yaml
+    with:
+      tag: ${{ needs.publish.outputs.tag }}
+      workflow_file: ${{ inputs.dist_workflow_file }}
+      tag_input: ${{ inputs.dist_tag_input }}
+
+  binstall-acceptance:
+    if: ${{ inputs.binstall_acceptance && inputs.registry_publish }}
+    needs:
+      - publish
+      - dist-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.publish.outputs.tag }}
+
+      - name: Read released crate identity
+        id: crate
+        shell: bash
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          manifest="${WORKING_DIRECTORY%/}/Cargo.toml"
+          metadata_file=$(mktemp)
+          cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 > "$metadata_file"
+          python3 - "$manifest" "$GITHUB_OUTPUT" "$metadata_file" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          manifest = pathlib.Path(sys.argv[1]).resolve()
+          output = pathlib.Path(sys.argv[2])
+          data = json.loads(pathlib.Path(sys.argv[3]).read_text())
+          matches = [
+              package for package in data["packages"]
+              if pathlib.Path(package["manifest_path"]).resolve() == manifest
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly one package for {manifest}, got {len(matches)}")
+          package = matches[0]
+          with output.open("a") as handle:
+              handle.write(f"name={package['name']}\n")
+              handle.write(f"version={package['version']}\n")
+          PY
+
+      - name: Wait for dist GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.publish.outputs.tag }}
+          ATTEMPTS: ${{ inputs.release_wait_attempts }}
+        run: |
+          set -euo pipefail
+          for ((attempt=1; attempt<=ATTEMPTS; attempt++)); do
+            release=$(
+              gh release view "$TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json isDraft,assets 2>/dev/null || true
+            )
+            if [[ -n "$release" ]] && python3 -c '
+          import json, sys
+          release = json.load(sys.stdin)
+          raise SystemExit(0 if not release["isDraft"] and len(release["assets"]) > 0 else 1)
+          ' <<<"$release"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::dist GitHub Release ${TAG} did not become ready with assets."
+          exit 1
+
+      - uses: cargo-bins/cargo-binstall@v1.21.1
+        with:
+          version: '1.21.1'
+
+      - name: Verify cargo binstall binary path
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CRATE_NAME: ${{ steps.crate.outputs.name }}
+          VERSION: ${{ steps.crate.outputs.version }}
+        run: |
+          set -euo pipefail
+          install_path="${RUNNER_TEMP}/binstall-bin"
+          mkdir -p "$install_path"
+
+          for attempt in {1..12}; do
+            if cargo binstall \
+              --no-confirm \
+              --force \
+              --disable-telemetry \
+              --strategies crate-meta-data \
+              --install-path "$install_path" \
+              "${CRATE_NAME}@=${VERSION}"; then
+              {
+                echo "## cargo binstall acceptance"
+                echo
+                echo "- crate: \`${CRATE_NAME}\`"
+                echo "- version: \`${VERSION}\`"
+                echo "- strategy: \`crate-meta-data\` only"
+                echo "- source-build fallback: disabled"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::cargo binstall could not install ${CRATE_NAME} ${VERSION} from binary metadata."
+          exit 1

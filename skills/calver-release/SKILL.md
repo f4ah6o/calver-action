@@ -1,6 +1,6 @@
 ---
 name: calver-release
-description: Add or maintain CalVer release automation for Rust crates, Go modules, and npm packages using f4ah6o/calver-action, including cargo-dist handoff. Use when configuring calendar releases, movable release tags such as latest, registry publish/no-publish policy, Go-module-compatible CalVer mapping, legacy tag prefixes, embedded Git SHA provenance, or cargo-dist GitHub Release artifacts.
+description: Add or maintain CalVer release automation for Rust crates and CLIs, Go modules, and npm packages using f4ah6o/calver-action, including dist and cargo-binstall acceptance. Use when configuring calendar releases, movable release tags such as latest, registry publish/no-publish policy, Go-module-compatible CalVer mapping, legacy tag prefixes, embedded Git SHA provenance, or Rust binary distribution.
 license: MIT
 ---
 
@@ -16,18 +16,20 @@ Keep these concepts separate:
 - **Ecosystem version**: a registry or module-compatible version when an ecosystem imposes extra rules.
 - **Source provenance**: release source commit SHA, embedded separately when useful for CLI `-V` output.
 - **Git tag**: immutable release tag.
-- **Release trigger**: commonly a movable `latest` tag, but the reusable workflows do not require a particular trigger.
+- **Release trigger**: commonly a movable `latest` tag, but reusable workflows do not require a particular trigger.
 - **Registry publication**: independent from GitHub repository visibility.
+- **Binary distribution**: for Rust CLIs, owned by dist after the immutable tag exists.
 
 Do not encode a Git SHA into the package version merely to expose provenance. Prefer a version plus separate source provenance.
 
-## Detect the package type
+## Detect the release shape
 
-- `Cargo.toml` -> use `.github/workflows/rust-crate.yaml`.
-- `go.mod` -> use `.github/workflows/go.yaml`.
-- `package.json` -> use `.github/workflows/npm.yaml`.
+- Rust library/crate with `Cargo.toml` -> `.github/workflows/rust-crate.yaml`.
+- Rust CLI/application that uses dist for prebuilt GitHub Release artifacts -> `.github/workflows/rust-dist.yaml`.
+- Go module with `go.mod` -> `.github/workflows/go.yaml`.
+- npm package with `package.json` -> `.github/workflows/npm.yaml`.
 
-If more than one exists, identify which package/module is being released and set `working_directory` accordingly.
+If more than one package exists, identify the released package and set `working_directory` accordingly.
 
 ## Default CalVer
 
@@ -38,35 +40,35 @@ format: YYYY.MM.PATCH
 timezone: Asia/Tokyo
 ```
 
-For Go, do **not** use the calendar year as the semantic major version. Prefer the Go workflow default:
+For Rust + dist, keep the version Cargo SemVer-compatible. Do not use a format such as `YYYY-0M-0D` for that path.
+
+For Go prefer the workflow default:
 
 ```yaml
 format: 1.YYYY0M.PATCH
 timezone: Asia/Tokyo
 ```
 
-It maps August 2026 to Go module version `v1.202608.0` while separately exposing human-facing CalVer `2026.8.0`. This keeps the semantic major stable across calendar years and avoids forcing `/vYYYY` into the Go module path.
+It maps August 2026 to Go module version `v1.202608.0` while separately exposing human-facing CalVer `2026.8.0`. This keeps the semantic major stable across calendar years and avoids forcing `/vYYYY` into the module path.
 
-Use another supported format only when the project already has a compatible convention. Supported calendar tokens are `YYYY`, `YY`, `0Y`, `MM`, `0M`, `WW`, `0W`, `DD`, and `0D`. `PATCH` is an extension provided by this action for collision sequencing.
+Supported calendar tokens are `YYYY`, `YY`, `0Y`, `MM`, `0M`, `WW`, `0W`, `DD`, and `0D`. `PATCH` is the action's collision counter.
 
 ## Legacy tag migration
 
-For Rust/npm, the action can absorb the difference between old `vYYYY.MM.PATCH` tags and new prefixless `YYYY.MM.PATCH` tags:
+For Rust/npm, preserve PATCH history across a `v` prefix migration:
 
 ```yaml
 tag_prefix: ''
 legacy_prefixes: v
 ```
 
-The allocator considers both the current prefix and all `legacy_prefixes` when finding the highest existing PATCH. Do not reset PATCH merely because a tag prefix convention changed.
-
-For Go, preserve a canonical `vMAJOR.MINOR.PATCH` basename. A root module defaults to prefix `v`; a nested module such as `tools/foo` defaults to `tools/foo/v`. Configure `legacy_prefixes` only for a real migration and make sure every new tag remains valid for Go modules.
+For Go, preserve a valid `vMAJOR.MINOR.PATCH` basename. Root modules default to prefix `v`; nested modules such as `tools/foo` default to `tools/foo/v`.
 
 ## Registry publication policy
 
 Repository visibility and registry publication are separate axes for Rust/npm.
 
-Use `registry_publish: true` when publishing to crates.io or npm. Use `registry_publish: false` for an internal/version-only release; validation, provenance, release-only commit creation, and immutable tagging still run.
+Use `registry_publish: true` for crates.io/npm publication. Use `registry_publish: false` for version-only/internal releases; validation, provenance, release-only commit creation, and immutable tagging still run.
 
 For a Rust package that must never be published externally, also consider:
 
@@ -75,49 +77,42 @@ For a Rust package that must never be published externally, also consider:
 publish = false
 ```
 
-Go does not use this switch in the reusable workflow. Go module publication is VCS-tag based, so the Go workflow validates the module and pushes the immutable module tag rather than uploading a package to a registry.
+Go publication is VCS-tag based, so the Go workflow validates the module and pushes the immutable module tag rather than uploading a package to a registry.
 
 ## Source selection
 
-A movable `latest` tag is the recommended simple trigger when a human or agent wants to select an exact release source commit:
+A movable `latest` tag is the simple source-selection trigger:
 
 ```bash
 git tag -f latest <commit-to-release>
 git push -f origin latest
 ```
 
-The selected commit does **not** need to be `source_branch` HEAD. Normal development may be ahead. The reusable workflow only requires that the selected source commit belongs to the configured `source_branch` history.
+The selected commit does not need to be `source_branch` HEAD. It only needs to belong to the configured source branch history.
 
-Do not push a release-only metadata/provenance commit back to the development branch. The immutable release tag should retain that commit.
+Do not merge release-only metadata/provenance commits back into the development branch. The immutable release tag retains that commit.
 
 ## Provenance for CLI versions
 
-For command-line tools, prefer embedding the short release source SHA separately from the version:
+For command-line tools, prefer:
 
 ```yaml
 provenance_file: src/release-commit.txt
 ```
 
-Then expose a version string such as:
+and expose a version such as:
 
 ```text
 mycli 2026.8.1 (a1b2c3d)
 ```
 
-The development checkout may use a stable placeholder such as `dev`. Ensure the provenance file is included in the published Rust/npm package, or embedded by the Go project's own build mechanism.
+Ensure the provenance file is included in the published package or otherwise consumed by the build.
 
-## Rust reusable workflow
+## Rust crate workflow
 
-Use a commit SHA pin for the reusable workflow. Do not point production release automation at `main`.
+Pin production callers to an immutable `calver-action` commit SHA.
 
 ```yaml
-name: Release
-
-on:
-  push:
-    tags:
-      - latest
-
 jobs:
   release:
     permissions:
@@ -132,22 +127,21 @@ jobs:
       provenance_file: src/release-commit.txt
 ```
 
-If `registry_publish: false`, `id-token: write` is not needed for crates.io authentication, but leaving it present is harmless. Prefer least privilege when editing an existing repository.
+Use this for crate publication without a prebuilt-binary distribution contract.
 
-## cargo-dist integration
+## Rust CLI + dist + cargo-binstall
 
-When a Rust CLI uses cargo-dist for GitHub Release artifacts, keep the immutable CalVer tag as the handoff boundary.
+Prefer the high-level `rust-dist.yaml` workflow for a normal Rust CLI release.
 
-Use a Cargo-style SemVer-compatible CalVer such as `YYYY.MM.PATCH`. cargo-dist's generated workflow parses the release tag as a Cargo-style SemVer version; formats such as `YYYY-0M-0D` are not interchangeable for this integration.
-
-Enable cargo-dist dispatch generation:
+Project-side dist configuration should enable explicit dispatch:
 
 ```toml
 [workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
 dispatch-releases = true
 ```
 
-Then regenerate with the project's pinned dist version and verify the generated workflow is clean:
+Then regenerate and validate the generated workflow:
 
 ```bash
 dist generate
@@ -155,55 +149,50 @@ dist generate --check
 dist manifest --artifacts=all --output-format=json --no-local-paths
 ```
 
-Do **not** rely on the immutable tag pushed with `GITHUB_TOKEN` to trigger a second `push.tags` workflow. GitHub suppresses most recursive workflow runs caused by `GITHUB_TOKEN`. Explicitly dispatch cargo-dist after the CalVer release job succeeds.
-
-Prefer the bundled reusable workflow:
+Caller:
 
 ```yaml
 jobs:
-  publish:
+  release:
     permissions:
+      actions: write
       contents: write
       id-token: write
-    uses: f4ah6o/calver-action/.github/workflows/rust-crate.yaml@<commit-sha>
+    uses: f4ah6o/calver-action/.github/workflows/rust-dist.yaml@<commit-sha>
     with:
       format: YYYY.MM.PATCH
       timezone: Asia/Tokyo
-      tag_prefix: v
-
-  dist-release:
-    needs: publish
-    permissions:
-      actions: write
-      contents: read
-    uses: f4ah6o/calver-action/.github/workflows/cargo-dist.yaml@<commit-sha>
-    with:
-      tag: ${{ needs.publish.outputs.tag }}
+      legacy_prefixes: v
+      registry_publish: true
+      provenance_file: src/release-commit.txt
 ```
 
-The cargo-dist helper passes the immutable tag as both the target workflow ref and the generated workflow's `tag` input. This is deliberate: the tag points at the release-only commit containing the final Cargo version, so cargo-dist builds the same source/version that was published to crates.io.
+The workflow keeps one owner for each side effect:
 
-Keep one owner for each publication side effect. A clean split is:
+- `rust-crate.yaml`: CalVer allocation, release-only commit, crates.io publication, immutable tag.
+- `cargo-dist.yaml`: explicit dispatch of the project's dist-generated workflow from that immutable tag.
+- dist: binaries/installers/checksums and GitHub Release assets.
+- `rust-dist.yaml`: waits for the published Release and runs the consumer acceptance.
 
-- `rust-crate.yaml`: CalVer allocation, release-only commit, crates.io publication, immutable tag;
-- cargo-dist: binaries/installers/checksums and GitHub Release assets.
+Do not rely on a tag pushed with `GITHUB_TOKEN` to recursively trigger a second `push.tags` workflow. The explicit dispatch exists to avoid that GitHub recursion suppression and to make dist build the exact release-only commit.
 
-If cargo-dist alone fails after the immutable tag exists, rerun or redispatch cargo-dist for that existing tag. Do not allocate a new CalVer merely to retry artifact generation.
+When `registry_publish: true`, `rust-dist.yaml` defaults to a real cargo-binstall acceptance. It uses cargo-binstall's `crate-meta-data` strategy only:
 
-See `docs/cargo-dist.md` / `docs/cargo-dist.ja.md` for the full integration rationale and recovery model.
+```text
+cargo binstall --strategies crate-meta-data <crate>@=<version>
+```
 
-## Go reusable workflow
+This intentionally excludes `quick-install` and source `compile` fallback, so a green acceptance proves the released binary metadata/path works rather than merely proving the crate can compile. The acceptance waits for a non-draft GitHub Release with assets and retries briefly for crates.io propagation.
 
-Use the Go workflow for a repository or subdirectory containing `go.mod`:
+For a version-only/internal dist release, use `registry_publish: false`; public cargo-binstall acceptance is skipped because crates.io metadata is absent. Set `binstall_acceptance: false` explicitly when documenting that policy.
+
+If only custom orchestration is needed, use the lower-level `.github/workflows/cargo-dist.yaml` helper directly. If dist or binstall fails after crates.io publication and immutable tag creation, recover from that existing tag rather than allocating a new CalVer.
+
+See `docs/rust-dist.md`, `docs/rust-dist.ja.md`, and the lower-level `docs/cargo-dist.md` guides.
+
+## Go workflow
 
 ```yaml
-name: Release
-
-on:
-  push:
-    tags:
-      - latest
-
 jobs:
   release:
     permissions:
@@ -213,7 +202,7 @@ jobs:
       timezone: Asia/Tokyo
 ```
 
-The default mapping is `2026.8.0` -> `v1.202608.0`. `version` returns the canonical Go module version, `calver` returns the human-facing `YYYY.M.PATCH`, and `tag` returns the full Git tag.
+The default mapping is `2026.8.0` -> `v1.202608.0`. `version` returns the canonical Go module version and `calver` returns the human-facing calendar version.
 
 For a nested module:
 
@@ -222,20 +211,11 @@ with:
   working_directory: tools/foo
 ```
 
-The tag prefix is automatically `tools/foo/v`, producing a tag such as `tools/foo/v1.202608.0`.
+For an existing v2 module, use `format: 2.YYYY0M.PATCH` and keep the `go.mod` module path ending in `/v2`.
 
-For an existing v2 module, use `format: 2.YYYY0M.PATCH` and keep the `go.mod` module path ending in `/v2`. The workflow validates v2+ module-path suffixes.
-
-## npm reusable workflow
+## npm workflow
 
 ```yaml
-name: Release
-
-on:
-  push:
-    tags:
-      - latest
-
 jobs:
   release:
     permissions:
@@ -250,21 +230,19 @@ jobs:
       access: public
 ```
 
-When npm Trusted Publishing is enabled, configure npm with the **calling workflow filename** from the package repository. If `registry_publish: false`, Trusted Publishing configuration is unnecessary.
+For npm Trusted Publishing, configure npm with the calling workflow filename from the package repository. If `registry_publish: false`, Trusted Publishing is unnecessary.
 
 ## Validation before commit
 
-Before committing integration changes:
-
-1. Validate all modified workflow YAML.
-2. Run the repository's normal test/check command.
-3. Confirm the reusable workflow is pinned to an immutable commit SHA.
-4. Check existing release tags and configure `legacy_prefixes` if changing prefix convention.
-5. For Go, verify the canonical module version and nested-module tag prefix; never let the calendar year become an unintended semantic major version.
-6. If using provenance, verify the file is included in the released artifact or consumed by the build.
-7. For cargo-dist, run `dist generate --check` and verify the release workflow accepts `workflow_dispatch` with a tag input.
+1. Validate modified workflow YAML and run the repository's normal tests/checks.
+2. Pin production reusable workflows to an immutable commit SHA.
+3. Check existing release tags and configure `legacy_prefixes` for real prefix migrations.
+4. Verify provenance is included or consumed by the released artifact.
+5. For Go, verify semantic-major/module-path compatibility.
+6. For dist, run `dist generate --check` and verify the generated workflow accepts explicit dispatch with a tag input.
+7. For Rust CLI distribution, keep cargo-binstall acceptance enabled unless registry publication is intentionally disabled.
 8. Do not move `latest` unless the user explicitly intends to trigger a release.
 
 ## Scope
 
-Do not add extra release triggers merely for flexibility. Keep trigger expansion YAGNI unless the repository has a concrete need for `workflow_dispatch`, GitHub Release events, branch release workflows, or another source-selection mechanism.
+Do not add release triggers merely for flexibility. Keep source selection, registry publication, binary distribution, and consumer acceptance explicit and independently recoverable.
