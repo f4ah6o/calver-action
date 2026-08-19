@@ -6,9 +6,9 @@ const path = require('node:path');
 const workflowPath = path.join(__dirname, '..', '.github', 'workflows', 'rust-dist.yaml');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 
-test('Rust dist workflow composes existing release owners', () => {
-  assert.match(workflow, /uses: \.\/\.github\/workflows\/rust-crate\.yaml/);
-  assert.match(workflow, /uses: \.\/\.github\/workflows\/cargo-dist\.yaml/);
+test('Rust dist workflow composes existing release owners from its own commit', () => {
+  assert.match(workflow, /uses: \$\/\.github\/workflows\/rust-crate\.yaml/);
+  assert.match(workflow, /uses: \$\/\.github\/workflows\/cargo-dist\.yaml/);
   assert.doesNotMatch(workflow, /cargo publish/);
   assert.doesNotMatch(workflow, /gh release create/);
 });
