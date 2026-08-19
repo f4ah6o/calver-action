@@ -91,7 +91,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    uses: ./.github/workflows/rust-crate.yaml
+    uses: $/.github/workflows/rust-crate.yaml
     with:
       format: ${{ inputs.format }}
       timezone: ${{ inputs.timezone }}
@@ -107,7 +107,7 @@ jobs:
     permissions:
       actions: write
       contents: read
-    uses: ./.github/workflows/cargo-dist.yaml
+    uses: $/.github/workflows/cargo-dist.yaml
     with:
       tag: ${{ needs.publish.outputs.tag }}
       workflow_file: ${{ inputs.dist_workflow_file }}
