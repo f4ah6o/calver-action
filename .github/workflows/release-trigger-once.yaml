@@ -1,4 +1,4 @@
-name: Release trigger (one-shot)
+name: Release calver-action from main once
 
 on:
   push:
@@ -11,24 +11,64 @@ permissions:
   contents: write
 
 jobs:
-  trigger:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: d52d460544cb0174c02020dcfae3f73b334fb3a8
           fetch-depth: 0
 
-      - name: Move latest to selected release source
+      - name: Verify pinned source is in main history
         shell: bash
-        env:
-          TARGET_SHA: d52d460544cb0174c02020dcfae3f73b334fb3a8
         run: |
           set -euo pipefail
           git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-          git cat-file -e "${TARGET_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "$TARGET_SHA" origin/main; then
-            echo "::error::Selected release source is not in main history."
+          test "$(git rev-parse HEAD)" = "d52d460544cb0174c02020dcfae3f73b334fb3a8"
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Pinned release source is no longer in main history."
             exit 1
           fi
-          git tag -f latest "$TARGET_SHA"
-          git push --force origin refs/tags/latest
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Validate action
+        run: npm run check
+
+      - name: Allocate CalVer
+        id: calver
+        uses: ./
+        with:
+          format: YYYY.MM.PATCH
+          timezone: Asia/Tokyo
+          create_tag: false
+
+      - name: Create CalVer tag and draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target d52d460544cb0174c02020dcfae3f73b334fb3a8 \
+            --draft \
+            --generate-notes \
+            --title "$TAG"
+
+      - name: Summary
+        shell: bash
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+          TAG: ${{ steps.calver.outputs.tag }}
+        run: |
+          {
+            echo "## calver-action release draft"
+            echo
+            echo "- version: \`$VERSION\`"
+            echo "- tag: \`$TAG\`"
+            echo "- source: \`d52d460544cb0174c02020dcfae3f73b334fb3a8\`"
+          } >> "$GITHUB_STEP_SUMMARY"
