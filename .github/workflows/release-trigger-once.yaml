@@ -1,4 +1,4 @@
-name: Release calver-action from main once
+name: Finalize calver-action 2026.9.0 once
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -30,45 +30,28 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Validate action
-        run: npm run check
-
-      - name: Allocate CalVer
-        id: calver
-        uses: ./
-        with:
-          format: YYYY.MM.PATCH
-          timezone: Asia/Tokyo
-          create_tag: false
-
-      - name: Create CalVer tag and draft GitHub Release
+      - name: Publish 2026.9.0 draft release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.calver.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target d52d460544cb0174c02020dcfae3f73b334fb3a8 \
-            --draft \
-            --generate-notes \
-            --title "$TAG"
+          gh release edit 2026.9.0 --repo "$GITHUB_REPOSITORY" --draft=false
 
-      - name: Summary
+      - name: Move latest to released main commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f latest d52d460544cb0174c02020dcfae3f73b334fb3a8
+          git push --force origin refs/tags/latest
+
+      - name: Verify release tags
         shell: bash
         env:
-          VERSION: ${{ steps.calver.outputs.version }}
-          TAG: ${{ steps.calver.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          {
-            echo "## calver-action release draft"
-            echo
-            echo "- version: \`$VERSION\`"
-            echo "- tag: \`$TAG\`"
-            echo "- source: \`d52d460544cb0174c02020dcfae3f73b334fb3a8\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          git ls-remote --exit-code --tags origin refs/tags/2026.9.0
+          actual=$(git ls-remote --tags origin refs/tags/latest | awk '{print $1}')
+          test "$actual" = "d52d460544cb0174c02020dcfae3f73b334fb3a8"
+          test "$(gh release view 2026.9.0 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "false"
